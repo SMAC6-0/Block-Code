@@ -1,4 +1,4 @@
-Written by Isa Kaplan (email gershonisa@gmail.com with any questions)
+ Written by Isa Kaplan (email gershonisa@gmail.com with any questions)
 
 Code Editing:
 We (SMAC 5.0) used Thonny to edit code, would recommend. 

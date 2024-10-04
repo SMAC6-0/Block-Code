@@ -1,19 +1,25 @@
-# Version implemented for for use without IR remote
-# last edited 3/27/24
+# Version implemented for for use without IR remote,
+# actually remote is used but just for first block in structure - "seedblock"
+# This version corrected issues with UNPLACED blinking as well as issues
+# with ignoring seedblock remote command
+
+# last edited 4/21/24
+# This version implemented to test ability to relay a message through multiple blocks
+
 
 # IMPORT LIBRARIES
 import sys
 import time
 from machine import *#import Pin, freq, PWM
 # rx
-from ir_rx.print_error import print_error
-from ir_rx.nec import NEC_8
+from BlockPackage.ir_rx.print_error import print_error
+from BlockPackage.ir_rx.nec import NEC_8
 # tx
 import uasyncio as asyncio
-from primitives.switch import Switch
-from primitives.delay_ms import Delay_ms
+from BlockPackage.primitives.switch import Switch
+from BlockPackage.primitives.delay_ms import Delay_ms
 # NEC Protocol
-from ir_tx.nec import NEC
+from BlockPackage.ir_tx.nec import NEC
 
 # PIN DEFINITIONS
 # face 1
@@ -45,15 +51,15 @@ pin_photo6 = Pin(18, Pin.IN, Pin.PULL_UP)
 ledb = Pin(22, Pin.OUT) # RGB LED Blue
 ledr = Pin(27, Pin.OUT) # RGB LED Red
 ledg = Pin(26, Pin.OUT) # RGB LED Green
-blu = PWM(ledb)
-red = PWM(ledr)
-gre = PWM(ledg)
-blu.freq(500)
-red.freq(500)
-gre.freq(500)
-blu.duty_u16(000)
-red.duty_u16(000)
-gre.duty_u16(000)
+# blu = PWM(ledb)
+# red = PWM(ledr)
+# gre = PWM(ledg)
+# blu.freq(500)
+# red.freq(500)
+# gre.freq(500)
+# blu.duty_u16(000)
+# red.duty_u16(000)
+# gre.duty_u16(000)
 
 # GLOBAL DEFINITIONS
 loop = asyncio.get_event_loop()
@@ -77,9 +83,10 @@ placed = 2
 seedblock = 3
 
 # IR message codes
-code_hs = 92 # handshake
+code_hs = 92 # handshake 
 code_hsr = 93 # handshake response
-code_sb = 65 # seed block 
+code_sb = 65 # seed block
+code_msg = 90 # relay message
 
 # flags
 flag_init = [0,0,0,0,0,0] # initial flag state, does nothing
@@ -87,6 +94,7 @@ flag = flag_init
 flag_hs = 1 # incoming handshake
 flag_hsr = 2 # incoming handshake response
 flag_sb = 3 # seed block flag
+flag_msg = 4 # message received flag
 
 
 # CLASS DEFINITIONS
@@ -103,8 +111,7 @@ class Coord:
         if incr:
             add = 1
         else:
-            add = -1
-
+            add = -1            
         if direction == 'x':
             self.X = self.X + add
         elif direction == 'y':
@@ -210,8 +217,8 @@ class Block:
 origin = Coord(0,0,0)
 selflocal = Local(0, origin)
 selfblock = Block(0, origin, 0, selflocal)
-    
-async def   main():
+
+async def main():
     global selfblock
     global do_once
     global R_duty
@@ -222,13 +229,11 @@ async def   main():
     global rx_pins
     global flag_init
     photo = Photo(photo_pins)
-    blink = True # for PLACED led blink
-    blink_count = 0
-    seed = False # initially not a seed block
+    LED = False # for UNPLACED led blink
+    seed = False # initially not a seed block            
     
                 # state machine #
-    while True:
-        print("IM FLASHING FUCKING CODE")
+    while True: 
         state = selfblock.returnstate() # get state from Block object 'selfblock'
         global rx_allowed # used to ignore self-received IR
         global flag
@@ -238,13 +243,11 @@ async def   main():
             # unplaced blocks check photoresistors
             # if number of dark PRs>0, change state to HANDSHAKE
             
-            # seed block control
-            for x in range(6):
-                if flag[x] == flag_sb:
-                    seed = True # set block to seed block
-                    flag = [0,0,0,0,0,0] # reset flag
-                    print("SEED")             
-                    
+            # blink LED white 
+            ledr.high()
+            ledg.high()
+            ledb.high()
+            
             DPR = 0 # number of dark photoresistors
             photos = photo.update() # read digital input PR values//need to add "deflicker" here
             for x in range(6): # counting number of dark PRs
@@ -252,36 +255,37 @@ async def   main():
                     DPR = DPR + 1
             print(DPR, "dark photoresistors") # for debug
             
+            # this delay controls blink length and allows time for IR rx
+            await asyncio.sleep(.2) 
+            
+            # turn off white LED blink
+            ledr.low()
+            ledg.low()
+            ledb.low()
+            
+            # seed block control
+            for x in range(6):
+                if flag[x] == flag_sb:
+                    seed = True # set block to seed block
+                    flag = [0,0,0,0,0,0] # reset flag
+                    print("SEED")
+                    
             # state-change control
             if seed:
                 selfblock.changestate(seedblock)
+                # constant white LED
+                ledr.high()
+                ledg.high()
+                ledb.high()
             elif DPR > 0:
                 selfblock.changestate(handshake)
-                
-            await asyncio.sleep(.1)
-            
-            # blinking white light to signal block is unplaced
-            if blink_count == 8:
-                blink = not blink
-                blink_count = 0
-            if blink:
-                blu.duty_u16(B_duty) 
-                red.duty_u16(R_duty)
-                gre.duty_u16(G_duty)
             else:
-                blu.duty_u16(0) 
-                red.duty_u16(0)
-                gre.duty_u16(0)            
-            blink_count = blink_count + 1
+                # this delay controls blink off time when no PRs are dark
+                await asyncio.sleep(.2)  
             
         # ================= SEEDBLOCK ===================#
         elif state == seedblock:
             print('SEEDBLOCK')
-            
-            # constant white LED
-            blu.duty_u16(B_duty) 
-            red.duty_u16(R_duty)
-            gre.duty_u16(G_duty)
             
             photos = photo.update() # read digital input PR values
             for x in range(6):
@@ -307,11 +311,9 @@ async def   main():
             # else, change state to PLACED
             print('HANDSHAKE') # for debug
             
-            # LED off
-            blu.duty_u16(0) 
-            red.duty_u16(0)
-            gre.duty_u16(0)
-
+            # record flag state from UNPLACED in case seedblock command received
+            prev_flag = flag 
+    
             for x in range(6): 
                 if not photos[x]: # if PR on face i is dark
                     rx_allowed = False # disable flag updates to avoid self-communication issue
@@ -324,17 +326,17 @@ async def   main():
                     
                     if flag[x] == flag_hsr: # check for response
                         flag = [0,0,0,0,0,0] # reset flag
-                        print('response detected') # for debug
+                        print("Receieved handshake on Face ", flag[x]) # for debug
                         selfblock.localadd(x, placed, origin, 1, 0) # add responding block to local 
                     else: # no response
-                        flag = [0,0,0,0,0,0] # reset flag
+                        flag = prev_flag # reset flag to recorded flag state
                         print('no response')
                         
             print(selfblock.local.numblocks1dos(), " adjacent blocks")            
-            if not selfblock.local.numblocks1dos():
-                selfblock.changestate(unplaced)
+            if not selfblock.local.numblocks1dos(): # if no adjacent blocks detected
+                selfblock.changestate(unplaced) # go back to UNPLACED
             else:
-                selfblock.changestate(placed)
+                selfblock.changestate(placed) # otherwise change to PLACED
             
         #==================== PLACED ====================#    
         elif state == placed: 
@@ -357,9 +359,10 @@ async def   main():
             photos = photo.update() # read digital input PR values
             adj = selfblock.local.returnfaces() # binary list of adjacent block status
             for x in range(6):
-                if not not adj[x]: # check if this is necssary #?#?#?#?#?
-                    if photos[x]:
+                if not not adj[x]: # if there was a block adjacent to face x - check if this 'not not' is necssary #?#?#?#?#?
+                    if photos[x]: # AND the photoresistor on face x is not dark
                         selfblock.localremove(x) # remove block from local
+                        
             # if no adjacent blocks, change state to UNPLACED
             if not selfblock.local.numblocks1dos():
                 do_once = True # reset do_once
@@ -377,72 +380,81 @@ async def   main():
                         flag = [0,0,0,0,0,0] # reset flag
                     flag = [0,0,0,0,0,0] # reset flag if PR not dark
             
+            # check for incoming messages
+            for x in range(6):
+                if flag[x] == flag_msg: # if message received on face x
+                    for y in range (6):
+                        if y != x: # relay message to every face except face x
+                            send = NEC(tx_pins[y], 38000) # prepare tx pin for sending
+                            send.transmit(0x1, code_msg, 0, True) # relay message to face y
+                            await asyncio.sleep(0.07) # approximate length of NEC transmission is 70 ms
+                    flag = [0,0,0,0,0,0] # reset flags
+                    
+            
             # LED Update
             AB = selfblock.local.numblocks1dos() # number of adjacent blocks
-
             if AB == 1: # if 1 block adjacent
-                blu.duty_u16(0)
-                red.duty_u16(0)
-                gre.duty_u16(G_duty) # green LED
+                ledr.low()
+                ledg.high()
+                ledb.low() # green LED
             elif AB == 2: # if 2 blocks adjacent
-                blu.duty_u16(B_duty)
-                red.duty_u16(R_duty) # purple LED
-                gre.duty_u16(0)
+                ledr.high()
+                ledg.low()
+                ledb.high() # purple LED
             elif AB == 3: # if 3 blocks adjacent
-                blu.duty_u16(B_duty) # blue LED
-                red.duty_u16(0) 
-                gre.duty_u16(0) 
+                ledr.low()
+                ledg.low()
+                ledb.high() # blue LED
             elif AB == 4: # if 4 blocks adjacent
-                blu.duty_u16(0)
-                red.duty_u16(R_duty) 
-                gre.duty_u16(5000) # yellow LED
+                ledr.low()
+                ledg.high()
+                ledb.high() # yellow LED
             elif AB == 5: # if 5 blocks adjacent
-                blu.duty_u16(0)
-                red.duty_u16(20000) 
-                gre.duty_u16(5000)
+                ledr.high()
+                ledg.high()
+                ledb.high() # white LED
                 
-                
-            await asyncio.sleep(.1)
+            await asyncio.sleep(.1) # iteration delay
             
                        
 # vvvvvvvvvvvvvvvvvvv rx code vvvvvvvvvvvvvvvvvvv #
 def readIRValue(data, pin):
-    # depending on data received, stores data in a buffer and raises a flag
+    # depending on data received, raises a corresponding flag
     global rx_pins
     if rx_allowed:
         for x in range(6):
             if pin == rx_pins[x]:
                 active = x
         global flag
-        if data == code_hsr:
+        if data == code_hsr: # handshake response
             flag[active] = flag_hsr
-        if data == code_hs:
+        if data == code_hs: # handshake
             flag[active] = flag_hs
-        if data == code_sb:
+        if data == code_sb: # seedblock
             flag[active] = flag_sb
+        if data == code_msg:
+            flag[active] = flag_msg
+            print("MESSAGE RECEIVED")
         print("flags =", flag)
-        print("This is my data" + data)
+        
     # remote control
-    if data == 88: # R button
-        blu.duty_u16(000)
-        red.duty_u16(R_duty)
-        gre.duty_u16(000)
-    if data == 89: # G button
-        blu.duty_u16(000)
-        red.duty_u16(000)
-        gre.duty_u16(G_duty)
-    if data == 69: # B button
-        blu.duty_u16(B_duty)
-        red.duty_u16(000)
-        gre.duty_u16(000)
-    if data == 68: # W Button
-        blu.duty_u16(000)
-        red.duty_u16(000)
-        gre.duty_u16(000)
+#     if data == 88: # R button
+#         blu.duty_u16(000)
+#         red.duty_u16(R_duty)
+#         gre.duty_u16(000)
+#     if data == 89: # G button
+#         blu.duty_u16(000)
+#         red.duty_u16(000)
+#         gre.duty_u16(G_duty)
+#     if data == 69: # B button
+#         blu.duty_u16(B_duty)
+#         red.duty_u16(000)
+#         gre.duty_u16(000)
+#     if data == 68: # W Button
+#         blu.duty_u16(000)
+#         red.duty_u16(000)
+#         gre.duty_u16(000)
     if data == 64: # power button
-        blu.duty_u16(000)
-        red.duty_u16(000)
-        gre.duty_u16(000)
         machine.reset()
     return data
 
@@ -451,18 +463,17 @@ def callback(data, addr, ctrl, pin):
         pass
     else:
         print(readIRValue(data, pin))
-        print("READING IR")
         #print(readIRValue(data, pin.returnid()))
 
 
-ir = NEC_8(pin_rx1, callback)  # Instantiate receiver
-ir2 = NEC_8(pin_rx2, callback)  # Instantiate receiver
-ir3 = NEC_8(pin_rx3, callback)  # Instantiate receiver
-ir4 = NEC_8(pin_rx4, callback)  # Instantiate receiver
-ir5 = NEC_8(pin_rx5, callback)  # Instantiate receiver
-ir6 = NEC_8(pin_rx6, callback)  # Instantiate receiver
+ir1 = NEC_8(pin_rx1, callback)  # Instantiate receiver on face 1
+ir2 = NEC_8(pin_rx2, callback)  # Instantiate receiver on face 2
+ir3 = NEC_8(pin_rx3, callback)  # Instantiate receiver on face 3
+ir4 = NEC_8(pin_rx4, callback)  # Instantiate receiver on face 4
+ir5 = NEC_8(pin_rx5, callback)  # Instantiate receiver on face 5
+ir6 = NEC_8(pin_rx6, callback)  # Instantiate receiver on face 6
 
-ir.error_function(print_error)  # Show debug information
+ir1.error_function(print_error)  # Print receiver debug information
 #^^^^^^^^^^^^^^^^^^^^^ rx code ^^^^^^^^^^^^^^^^^^^^^#
 
 loop.run_until_complete(main()) # main loop
